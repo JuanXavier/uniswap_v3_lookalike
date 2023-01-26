@@ -13,17 +13,21 @@ library Tick {
      * @param _tick An integer (int24) representing the specific tick for which the liquidity is to be updated.
      * @param _liquidityDelta An unsigned integer (uint128) representing the amount of liquidity to be added or removed from the specific tick.
      */
-    function update(
-        mapping(int24 => Tick.Info) storage _self,
-        int24 _tick,
-        uint128 _liquidityDelta
-    ) internal {
+    // prettier-ignore
+    function _update(mapping(int24 => Tick.Info) storage _self, int24 _tick, uint128 _liquidityDelta) internal {
+        // Access Tick.Info in storage mapping with the given _tick
         Tick.Info storage tickInfo = _self[_tick];
+        
+        // Get the liquidity of it 
         uint128 liquidityBefore = tickInfo.liquidity;
+        
+        // Update liquidity with input _liquidity delta
         uint128 liquidityAfter = liquidityBefore + _liquidityDelta;
 
+        // Initialize if uninitialized
         if (liquidityBefore == 0) tickInfo.initialized = true;
-
+        
+        // Update the liquidity in storage
         tickInfo.liquidity = liquidityAfter;
     }
 }
