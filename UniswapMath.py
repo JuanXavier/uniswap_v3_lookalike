@@ -47,7 +47,7 @@ def calc_amount1(liq, pa, pb):
     return int(liq * (pb - pa) / q96)
 
 
-# Liquidity provision
+# Liquidity range provision
 price_low = 4545
 price_cur = 5000
 price_upp = 5500
