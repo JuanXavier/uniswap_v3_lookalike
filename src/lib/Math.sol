@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.14;
 
-import "./FixedPoint96.sol";
+import { FixedPoint96 } from "./FixedPoint96.sol";
 import "prb-math/Core.sol";
 
 library Math {
@@ -36,8 +36,8 @@ library Math {
     /**
      * @dev Finds △y
      * TODO: round down when removing liquidity
-     * @param sqrtPriceAX96 The sqrt price A in 96 bits fixed point format.
-     * @param sqrtPriceBX96 The sqrt price B in 96 bits fixed point format.
+     * @param sqrtPriceAX96 The √priceA in 96 bits fixed point format.
+     * @param sqrtPriceBX96 The √priceB in 96 bits fixed point format.
      * @param liquidity The amount of liquidity.
      * @return amount1 The amount of token1.
      */
@@ -52,12 +52,13 @@ library Math {
     }
 
     /**
-     * @dev Gets the next sqrt price from input, rounding up for amount0 and rounding down for amount1.
-     * @param sqrtPriceX96 The current sqrt price in 96 bits fixed point format.
+     * @dev Calculates a √P given from input, rounding up for amount0 and rounding down for amount1.
+     * @param sqrtPriceX96 The current √P in 96 bits fixed point format.
      * @param liquidity The amount of liquidity.
      * @param amountIn The amount of input.
      * @param zeroForOne Whether to calculate the price for amount0 or amount1.
-     * @return sqrtPriceNextX96 The next sqrt price in 96 bits fixed point format.
+     * @return sqrtPriceNextX96 The next sqrt price in 96 bits fixed point format. It's what the price will be after
+     *  swapping the specified amountIn of tokens, given the current price and liquidity.
      */
     function getNextSqrtPriceFromInput(
         uint160 sqrtPriceX96,
@@ -85,15 +86,19 @@ library Math {
         uint256 numerator = uint256(liquidity) << FixedPoint96.RESOLUTION;
         uint256 product = amountIn * sqrtPriceX96;
 
-        // If product doesn't overflow, use the precise formula.
+        /// If product doesn't overflow, use the precise formula.
+        ///                                  √P * L
+        /// √Ptarget = ────────────────
+        ///                            ( △x * √P ) + L
         if (product / amountIn == sqrtPriceX96) {
             uint256 denominator = numerator + product;
-            if (denominator >= numerator) {
-                return uint160(mulDivRoundingUp(numerator, sqrtPriceX96, denominator));
-            }
+            if (denominator >= numerator) return uint160(mulDivRoundingUp(numerator, sqrtPriceX96, denominator));
         }
 
-        // If product overflows, use a less precise formula.
+        /// If product overflows, use a less precise formula.
+        ///                                        L
+        /// √Ptarget =  ────────────────
+        ///                              △x  +( L / √P )
         return uint160(divRoundingUp(numerator, (numerator / sqrtPriceX96) + amountIn));
     }
 

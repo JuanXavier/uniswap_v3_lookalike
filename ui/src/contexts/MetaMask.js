@@ -3,35 +3,35 @@ import { createContext, useState } from "react";
 export const MetaMaskContext = createContext();
 
 export const MetaMaskProvider = ({ children }) => {
+  const [status, setStatus] = useState('not_connected');
   const [account, setAccount] = useState(null);
   const [chain, setChain] = useState(null);
-  const [status, setStatus] = useState("not_connected");
 
   const connect = () => {
-    if (typeof window.ethereum === "undefined") {
-      return setStatus("not_installed");
+    if (typeof (window.ethereum) === 'undefined') {
+      return setStatus('not_installed');
     }
 
     Promise.all([
-      window.ethereum.request({ method: "eth_requestAccounts" }),
-      window.ethereum.request({ method: "eth_chainId" }),
-    ])
-      .then(function ([accounts, chainId]) {
-        setAccount(accounts[0]);
-        setChain(chainId);
-        setStatus("connected");
-      })
+      window.ethereum.request({ method: 'eth_requestAccounts' }),
+      window.ethereum.request({ method: 'eth_chainId' }),
+    ]).then(function ([accounts, chainId]) {
+      setAccount(accounts[0]);
+      setChain(chainId);
+      setStatus('connected');
+    })
       .catch(function (error) {
-        console.error(error);
+        console.error(error)
       });
-  };
+  }
 
   const metamaskContext = {
-    status,
-    account,
-    chain,
-    connect,
+    status, account, chain, connect
   };
 
-  return <MetaMaskContext.Provider value={metamaskContext}>{children}</MetaMaskContext.Provider>;
-};
+  return (
+    <MetaMaskContext.Provider value={metamaskContext}>
+      {children}
+    </MetaMaskContext.Provider>
+  )
+}

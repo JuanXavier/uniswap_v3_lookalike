@@ -74,7 +74,13 @@ contract UniswapV3Pool {
         address payer;
     }
 
-    // maintains current swap’s state.
+    /**
+     * @dev Struct for maintaining the current state of a swap.
+     * @param amountSpecifiedRemaining  tracks the remaining amount of tokens to be bought by the pool. When it's zero, the swap is completed.
+     * @param amountCalculated  calculated output amount by the contract.
+     * @param sqrtPriceX96  new current price after
+     * @param tick tick
+     */
     struct SwapState {
         uint256 amountSpecifiedRemaining;
         uint256 amountCalculated;
@@ -82,7 +88,14 @@ contract UniswapV3Pool {
         int24 tick;
     }
 
-    // maintains current swap step’s state.
+    /**
+     * @dev Struct for maintaining the current state of a swap step. It tracks the state of one iteration of an “order filling”.
+     * @param sqrtPriceStartX96  tracks the starting price of the iteration.
+     * @param nextTick  the next initialized tick that will provide liquidity for the swap.
+     * @param sqrtPriceNextX96  the price at the next tick.
+     * @param amountIn  the amount that can be provided by the liquidity of the current iteration.
+     * @param amountOut  the output amount that can be provided by the liquidity of the current iteration.
+     */
     struct StepState {
         uint160 sqrtPriceStartX96;
         int24 nextTick;
@@ -185,9 +198,18 @@ contract UniswapV3Pool {
     //                     SWAP
     /////////////////////////////////////////////////////////////////
 
+    /**
+     * @dev Function to execute a swap between two tokens in a smart pool.
+     * @param _recipient Address of the recipient to receive the output tokens.
+     * @param _zeroForOne Boolean flag to control the swap direction. When true, token0 is traded in for token1; when false, it’s the opposite.
+     * @param _amountSpecified Unsigned integer (uint256) representing the amount of the input token specified for the swap.
+     * @param _data A byte array to pass extra data for the swap.
+     * @return amount0_ A byte array to pass extra data for the swap.
+     * @return amount1_  A byte array to pass extra data for the swap.
+     */
     function swap(
         address _recipient,
-        bool _zeroForOne, //  flag that controls swap direction: when true, token0 is traded in for token1; when false, it’s the opposite
+        bool _zeroForOne,
         uint256 _amountSpecified,
         bytes calldata _data
     ) public returns (int256 amount0_, int256 amount1_) {
@@ -201,7 +223,11 @@ contract UniswapV3Pool {
             tick: slot0_.tick
         });
 
-        // While the amount specified is greater than 0
+        // Loop until amountSpecifiedRemaining is 0, which will mean that the pool has enough liquidity to buy amountSpecified tokens from user.
+        // we set up a price range that should provide liquidity for the swap
+        // The range is from state.sqrtPriceX96 to step.sqrtPriceNextX96,
+        // where the latter is the price at the next initialized tick
+        // (as returned by nextInitializedTickWithinOneWord.
         while (state.amountSpecifiedRemaining > 0) {
             // Declare a new swap step
             StepState memory step;
@@ -209,7 +235,7 @@ contract UniswapV3Pool {
             // Assign the START PRICE from the swap state
             step.sqrtPriceStartX96 = state.sqrtPriceX96;
 
-            // Look out for the next tick in the tickBitmap mapping
+            // Look out for the next initialized tick in the tickBitmap mapping
             (step.nextTick, ) = tickBitmap.nextInitializedTickWithinOneWord(
                 state.tick, // tick
                 1, // tickSpacing
@@ -217,9 +243,13 @@ contract UniswapV3Pool {
             );
 
             // Get the NEXT PRICE at tick obtained in previous calculation
+            //  equation ===> ( sqrt(1.0001^tick) * 2^96 )
+            // A Fixed point Q64.96 number representing the sqrt of the ratio of the two assets (token1/token0)
+            // at the given tick
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.nextTick);
 
-            //
+            // Compute the price, amountIn and amountOut
+            // we’re calculating the amounts that can be provider by the current price range, and the new current price the swap will result in.
             (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath.computeSwapStep(
                 step.sqrtPriceStartX96, // current price
                 step.sqrtPriceNextX96, // target price
@@ -227,28 +257,32 @@ contract UniswapV3Pool {
                 state.amountSpecifiedRemaining // remaining
             );
 
+            //  amount of tokens the price range can buy from user
             state.amountSpecifiedRemaining -= step.amountIn;
+
+            // related number of the other token the pool can sell to user
             state.amountCalculated += step.amountOut;
+
+            //  state.sqrtPriceX96 is the current price that will be set after the swap (recall that trading changes current price).
             state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
         }
 
-        if (state.tick != slot0_.tick) {
-            (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
-        }
+        // Set new price and tick only if the new tick is different, to optimize gas.
+        if (state.tick != slot0_.tick) (slot0.sqrtPriceX96, slot0.tick) = (state.sqrtPriceX96, state.tick);
 
+        // Calculate swap amounts based on swap direction and the amounts calculated during the swap loop.
         (amount0_, amount1_) = _zeroForOne
             ? (int256(_amountSpecified - state.amountSpecifiedRemaining), -int256(state.amountCalculated))
             : (-int256(state.amountCalculated), int256(_amountSpecified - state.amountSpecifiedRemaining));
 
+        // Exchange tokens with user, depending on swap direction
         if (_zeroForOne) {
             IERC20(token1).transfer(_recipient, uint256(-amount1_));
-
             uint256 balance0Before = _balance0();
             IUniswapV3SwapCallback(msg.sender).uniswapV3SwapCallback(amount0_, amount1_, _data);
             if (balance0Before + uint256(amount0_) > _balance0()) revert InsufficientInputAmount();
         } else {
             IERC20(token0).transfer(_recipient, uint256(-amount0_));
-
             uint256 balance1Before = _balance1();
             IUniswapV3SwapCallback(msg.sender).uniswapV3SwapCallback(amount0_, amount1_, _data);
             if (balance1Before + uint256(amount1_) > _balance1()) revert InsufficientInputAmount();

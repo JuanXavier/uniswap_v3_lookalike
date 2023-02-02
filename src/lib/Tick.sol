@@ -17,7 +17,7 @@ library Tick {
         mapping(int24 => Tick.Info) storage _self,
         int24 _tick,
         uint128 _liquidityDelta
-    ) internal returns (bool flipped) {
+    ) internal returns (bool flipped_) {
         // Access Tick.Info in storage mapping with the given _tick
         Tick.Info storage tickInfo = _self[_tick];
 
@@ -27,7 +27,7 @@ library Tick {
         // Update liquidity with input _liquidity delta
         uint128 liquidityAfter = liquidityBefore + _liquidityDelta;
 
-        flipped = (liquidityAfter == 0) != (liquidityBefore == 0);
+        flipped_ = (liquidityAfter == 0) != (liquidityBefore == 0);
 
         // Initialize if uninitialized
         if (liquidityBefore == 0) tickInfo.initialized = true;
