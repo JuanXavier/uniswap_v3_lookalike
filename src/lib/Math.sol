@@ -87,18 +87,18 @@ library Math {
         uint256 product = amountIn * sqrtPriceX96;
 
         /// If product doesn't overflow, use the precise formula.
-        ///                          √P * L
+        ///                        √P * L
         /// √Ptarget = ────────────────────────────────
-        ///                    ( △x * √P ) + L
+        ///                   ( △x * √P ) + L
         if (product / amountIn == sqrtPriceX96) {
             uint256 denominator = numerator + product;
             if (denominator >= numerator) return uint160(mulDivRoundingUp(numerator, sqrtPriceX96, denominator));
         }
 
         /// If product overflows, use a less precise formula.
-        ///                            L
+        ///                          L
         /// √Ptarget =  ─────────────────────────────
-        ///                     △x  + ( L / √P )
+        ///                    △x  + ( L / √P )
         return uint160(divRoundingUp(numerator, (numerator / sqrtPriceX96) + amountIn));
     }
 
