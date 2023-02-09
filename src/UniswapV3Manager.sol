@@ -1,27 +1,63 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.14;
 
-import "../src/UniswapV3Pool.sol";
-import "../src/lib/interfaces/IERC20.sol";
+import "./libraries/interfaces/IUniswapV3Pool.sol";
+import "./libraries/LiquidityMath.sol";
+import "./libraries/interfaces/IUniswapV3Manager.sol";
+import { UniswapV3Pool, IERC20, TickMath } from "../src/UniswapV3Pool.sol";
 
-contract UniswapV3Manager {
-    function mint(
-        address poolAddress_,
-        int24 lowerTick,
-        int24 upperTick,
-        uint128 liquidity,
-        bytes calldata data
-    ) public returns (uint256, uint256) {
-        return UniswapV3Pool(poolAddress_).mint(msg.sender, lowerTick, upperTick, liquidity, data);
+contract UniswapV3Manager is IUniswapV3Manager {
+    error SlippageCheckFailed(uint256 amount0, uint256 amount1);
+
+    function mint(MintParams calldata params) public returns (uint256 amount0, uint256 amount1) {
+        IUniswapV3Pool pool = IUniswapV3Pool(params.poolAddress);
+
+        (uint160 sqrtPriceX96, , , , ) = pool.slot0();
+
+        // √upper √lower
+        uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(params.lowerTick);
+        uint160 sqrtPriceUpperX96 = TickMath.getSqrtRatioAtTick(params.upperTick);
+
+        uint128 liquidity = LiquidityMath.getLiquidityForAmounts(
+            sqrtPriceX96,
+            sqrtPriceLowerX96,
+            sqrtPriceUpperX96,
+            params.amount0Desired,
+            params.amount1Desired
+        );
+
+        // amount0Min and amount1Min are the amounts that are calculated based on slippage tolerance.
+        // They must be smaller than the desired amounts, with the gap controlled by the slippage tolerance setting.
+        // Liquidity provider expect to provide amounts not smaller than amount0Min and amount1Min.
+        (amount0, amount1) = pool.mint(
+            msg.sender,
+            params.lowerTick,
+            params.upperTick,
+            liquidity,
+            abi.encode(IUniswapV3Pool.CallbackData({ token0: pool.token0(), token1: pool.token1(), payer: msg.sender }))
+        );
+
+        //Next step is to provide liquidity to the pool and check the amounts returned by the pool: if they’re too low, we revert.
+        if (amount0 < params.amount0Min || amount1 < params.amount1Min) revert SlippageCheckFailed(amount0, amount1);
     }
 
     function swap(
         address poolAddress_,
         bool zeroForOne,
         uint256 amountSpecified,
+        uint160 sqrtPriceLimitX96,
         bytes calldata data
     ) public returns (int256, int256) {
-        return UniswapV3Pool(poolAddress_).swap(msg.sender, zeroForOne, amountSpecified, data);
+        return
+            IUniswapV3Pool(poolAddress_).swap(
+                msg.sender,
+                zeroForOne,
+                amountSpecified,
+                sqrtPriceLimitX96 == 0
+                    ? (zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1)
+                    : sqrtPriceLimitX96,
+                data
+            );
     }
 
     function uniswapV3MintCallback(

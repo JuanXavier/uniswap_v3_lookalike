@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.17;
 
+import { LiquidityMath } from "./LiquidityMath.sol";
+
 library Tick {
     struct Info {
         bool initialized;
-        uint128 liquidity;
+        // total liquidity at tick
+        uint128 liquidityGross;
+        // amount of liqudiity added or subtracted when tick is crossed
+        int128 liquidityNet;
     }
 
     /**
@@ -16,23 +21,37 @@ library Tick {
     function _update(
         mapping(int24 => Tick.Info) storage _self,
         int24 _tick,
-        uint128 _liquidityDelta
+        int128 _liquidityDelta,
+        bool _upper
     ) internal returns (bool flipped_) {
         // Access Tick.Info in storage mapping with the given _tick
         Tick.Info storage tickInfo = _self[_tick];
 
         // Get the liquidity of it
-        uint128 liquidityBefore = tickInfo.liquidity;
+        uint128 liquidityBefore = tickInfo.liquidityGross;
 
         // Update liquidity with input _liquidity delta
-        uint128 liquidityAfter = liquidityBefore + _liquidityDelta;
+        uint128 liquidityAfter = LiquidityMath.addLiquidity(liquidityBefore, _liquidityDelta);
 
         flipped_ = (liquidityAfter == 0) != (liquidityBefore == 0);
 
         // Initialize if uninitialized
         if (liquidityBefore == 0) tickInfo.initialized = true;
 
+        tickInfo.liquidityGross = liquidityAfter;
+
         // Update the liquidity in storage
-        tickInfo.liquidity = liquidityAfter;
+        tickInfo.liquidityNet = _upper
+            ? int128(int256(tickInfo.liquidityNet) - _liquidityDelta)
+            : int128(int256(tickInfo.liquidityNet) + _liquidityDelta);
+    }
+
+    function cross(mapping(int24 => Tick.Info) storage _self, int24 _tick)
+        internal
+        view
+        returns (int128 liquidityDelta)
+    {
+        Tick.Info storage info = _self[_tick];
+        liquidityDelta = info.liquidityNet;
     }
 }

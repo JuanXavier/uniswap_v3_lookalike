@@ -10,3 +10,4 @@ node_modules
 
 # Dotenv file
 .env
+.VSCodeCounter

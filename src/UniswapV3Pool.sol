@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.17;
 
-import { IERC20 } from "./lib/interfaces/IERC20.sol";
-import { IUniswapV3MintCallback } from "./lib/interfaces/IUniswapV3MintCallback.sol";
-import { IUniswapV3SwapCallback } from "./lib/interfaces/IUniswapV3SwapCallback.sol";
+import { IERC20 } from "./libraries/interfaces/IERC20.sol";
+import { IUniswapV3MintCallback } from "./libraries/interfaces/IUniswapV3MintCallback.sol";
+import { IUniswapV3SwapCallback } from "./libraries/interfaces/IUniswapV3SwapCallback.sol";
 
-import { Math, SwapMath } from "./lib/SwapMath.sol";
-import { Position } from "./lib/Position.sol";
-import { Tick } from "./lib/Tick.sol";
-import { TickMath } from "./lib/TickMath.sol";
-import { TickBitmap } from "./lib/TickBitmap.sol";
+import { Math, SwapMath } from "./libraries/SwapMath.sol";
+import { LiquidityMath } from "./libraries/LiquidityMath.sol";
+import { Position } from "./libraries/Position.sol";
+import { Tick } from "./libraries/Tick.sol";
+import { TickMath } from "./libraries/TickMath.sol";
+import { TickBitmap } from "./libraries/TickBitmap.sol";
+
+// Pools also track
+// �
+// L (liquidity variable in our code), which is the total liquidity provided by all price ranges that include current price.
 
 contract UniswapV3Pool {
     using Tick for mapping(int24 => Tick.Info);
@@ -24,6 +29,8 @@ contract UniswapV3Pool {
     error InsufficientInputAmount();
     error InvalidTickRange();
     error ZeroLiquidity();
+    error InvalidPriceLimit();
+    error NotEnoughLiquidity();
 
     ///////////////////////////////////////////////
     //             EVENTS
@@ -35,15 +42,15 @@ contract UniswapV3Pool {
         int24 indexed tickLower,
         int24 indexed tickUpper,
         uint128 amount,
-        uint256 amount0,
-        uint256 amount1
+        uint256 amount0_,
+        uint256 amount1_
     );
 
     event Swap(
         address indexed sender,
         address indexed recipient,
-        int256 amount0,
-        int256 amount1,
+        int256 amount0_,
+        int256 amount1_,
         uint160 sqrtPriceX96,
         uint128 liquidity,
         int24 tick
@@ -86,6 +93,7 @@ contract UniswapV3Pool {
         uint256 amountCalculated;
         uint160 sqrtPriceX96;
         int24 tick;
+        uint128 liquidity;
     }
 
     /**
@@ -99,6 +107,7 @@ contract UniswapV3Pool {
     struct StepState {
         uint160 sqrtPriceStartX96;
         int24 nextTick;
+        bool initialized;
         uint160 sqrtPriceNextX96;
         uint256 amountIn;
         uint256 amountOut;
@@ -137,8 +146,8 @@ contract UniswapV3Pool {
      * @param _upperTick Upper tick of the liquidity provision range.
      * @param _amount The amount of liquidity being provided.
      * @param _data Additional data passed through the call.
-     * @return amount0 Amount of token0.
-     * @return amount1 Amount of token1.
+     * @return amount0_ Amount of token0.
+     * @return amount1_ Amount of token1.
      */
     function mint(
         address _owner,
@@ -146,14 +155,15 @@ contract UniswapV3Pool {
         int24 _upperTick,
         uint128 _amount,
         bytes calldata _data
-    ) external returns (uint256 amount0, uint256 amount1) {
+    ) external returns (uint256 amount0_, uint256 amount1_) {
         // Sanity checks for validating ticks and liquidity
         if (_lowerTick >= _upperTick || _lowerTick < MIN_TICK || _upperTick > MAX_TICK) revert InvalidTickRange();
         if (_amount == 0) revert ZeroLiquidity();
 
         // Update ticks for the range
-        bool flippedLower = ticks._update(_lowerTick, _amount);
-        bool flippedUpper = ticks._update(_upperTick, _amount);
+        bool flippedLower = ticks._update(_lowerTick, int128(_amount), false);
+        bool flippedUpper = ticks._update(_upperTick, int128(_amount), true);
+
         if (flippedLower) tickBitmap.flipTick(_lowerTick, 1);
         if (flippedUpper) tickBitmap.flipTick(_upperTick, 1);
 
@@ -163,35 +173,50 @@ contract UniswapV3Pool {
 
         Slot0 memory slot0_ = slot0;
 
-        // Declare the amounts
-        amount0 = Math.calcAmount0Delta(
-            TickMath.getSqrtRatioAtTick(slot0_.tick),
-            TickMath.getSqrtRatioAtTick(_upperTick),
-            _amount
-        );
+        /**
+         * To support all the kinds of price ranges, we need to know whether the current price is
+         *below, inside, or above the price range specified by user and calculate token amounts
+         *accordingly. If the price range is above the current price, we want the liquidity to be composed of token x:
+         */
+        if (slot0_.tick < _lowerTick) {
+            amount0_ = Math.calcAmount0Delta(
+                TickMath.getSqrtRatioAtTick(_lowerTick),
+                TickMath.getSqrtRatioAtTick(_upperTick),
+                _amount
+            );
+        }
+        /**
+         * When the price range includes the current price, we want both tokens in amounts proportional to the price
+         * Notice that this is the only scenario where we want to update liquidity since the variable tracks
+         * liquidity that’s available immediately.
+         */
+        else if (slot0_.tick < _upperTick) {
+            amount0_ = Math.calcAmount0Delta(slot0_.sqrtPriceX96, TickMath.getSqrtRatioAtTick(_upperTick), _amount);
 
-        amount1 = Math.calcAmount1Delta(
-            TickMath.getSqrtRatioAtTick(slot0_.tick),
-            TickMath.getSqrtRatioAtTick(_lowerTick),
-            _amount
-        );
+            amount1_ = Math.calcAmount1Delta(slot0_.sqrtPriceX96, TickMath.getSqrtRatioAtTick(_lowerTick), _amount);
 
-        // Update the liquidity
-        liquidity += uint128(_amount);
+            liquidity = LiquidityMath.addLiquidity(liquidity, int128(_amount)); // TODO: amount is negative when removing liquidity
+        }
+        /*
+         * In all other cases, when the price range is below the current price, we want the range to contain only token y:
+         */
+        else {
+            amount1_ = Math.calcAmount1Delta(
+                TickMath.getSqrtRatioAtTick(_lowerTick),
+                TickMath.getSqrtRatioAtTick(_upperTick),
+                _amount
+            );
+        }
 
-        // Update balances from
         uint256 balance0Before;
         uint256 balance1Before;
-        if (amount0 > 0) balance0Before = _balance0();
-        if (amount1 > 0) balance1Before = _balance1();
+        if (amount0_ > 0) balance0Before = _balance0();
+        if (amount1_ > 0) balance1Before = _balance1();
+        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(amount0_, amount1_, _data);
+        if (amount0_ > 0 && balance0Before + amount0_ > _balance0()) revert InsufficientInputAmount();
+        if (amount1_ > 0 && balance1Before + amount1_ > _balance1()) revert InsufficientInputAmount();
 
-        // Make external call to sender contract (manager)
-        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(amount0, amount1, _data);
-
-        if (amount0 > 0 && balance0Before + amount0 > _balance0()) revert InsufficientInputAmount();
-        if (amount1 > 0 && balance1Before + amount1 > _balance1()) revert InsufficientInputAmount();
-
-        emit Mint(msg.sender, _owner, _lowerTick, _upperTick, _amount, amount0, amount1);
+        emit Mint(msg.sender, _owner, _lowerTick, _upperTick, _amount, amount0_, amount1_);
     }
 
     /////////////////////////////////////////////////////////////////
@@ -203,6 +228,7 @@ contract UniswapV3Pool {
      * @param _recipient Address of the recipient to receive the output tokens.
      * @param _zeroForOne Boolean flag to control the swap direction. When true, token0 is traded in for token1; when false, it’s the opposite.
      * @param _amountSpecified Unsigned integer (uint256) representing the amount of the input token specified for the swap.
+     * @param _sqrtPriceLimitX96 Unsigned integer (uint160) representing the limit of the sqrt price.
      * @param _data A byte array to pass extra data for the swap.
      * @return amount0_ A byte array to pass extra data for the swap.
      * @return amount1_  A byte array to pass extra data for the swap.
@@ -211,16 +237,29 @@ contract UniswapV3Pool {
         address _recipient,
         bool _zeroForOne,
         uint256 _amountSpecified,
+        uint160 _sqrtPriceLimitX96,
         bytes calldata _data
     ) public returns (int256 amount0_, int256 amount1_) {
         Slot0 memory slot0_ = slot0;
+        uint128 liquidity_ = liquidity;
+
+        // When selling token x (zeroForOne is true), sqrtPriceLimitX96 must be between the current price
+        // and the minimal √P since selling token x moves the price down.
+        // Likewise, when selling token y, sqrtPriceLimitX96 must be between the current price
+        // and the maximal √P because price moves up.
+        if (
+            _zeroForOne
+                ? _sqrtPriceLimitX96 > slot0_.sqrtPriceX96 || _sqrtPriceLimitX96 < TickMath.MIN_SQRT_RATIO
+                : _sqrtPriceLimitX96 < slot0_.sqrtPriceX96 || _sqrtPriceLimitX96 > TickMath.MAX_SQRT_RATIO
+        ) revert InvalidPriceLimit();
 
         // Declare a new swap state
         SwapState memory state = SwapState({
             amountSpecifiedRemaining: _amountSpecified,
             amountCalculated: 0,
             sqrtPriceX96: slot0_.sqrtPriceX96,
-            tick: slot0_.tick
+            tick: slot0_.tick,
+            liquidity: liquidity_
         });
 
         // Loop until amountSpecifiedRemaining is 0, which will mean that the pool has enough liquidity to buy amountSpecified tokens from user.
@@ -228,7 +267,9 @@ contract UniswapV3Pool {
         // The range is from state.sqrtPriceX96 to step.sqrtPriceNextX96,
         // where the latter is the price at the next initialized tick
         // (as returned by nextInitializedTickWithinOneWord.
-        while (state.amountSpecifiedRemaining > 0) {
+        //two conditions: full swap amount has not been filled and current price isn’t equal to sqrtPriceLimitX96
+        //Uniswap V3 pools don’t fail when slippage tolerance gets hit and simply executes swap partially.
+        while (state.amountSpecifiedRemaining > 0 && state.sqrtPriceX96 != _sqrtPriceLimitX96) {
             // Declare a new swap step
             StepState memory step;
 
@@ -250,11 +291,14 @@ contract UniswapV3Pool {
 
             // Compute the price, amountIn and amountOut
             // we’re calculating the amounts that can be provider by the current price range, and the new current price the swap will result in.
+            // ensure that computeSwapStep never calculates swap amounts outside of sqrtPriceLimitX96–this guarantees that the current price will never cross the limiting price.
             (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath.computeSwapStep(
-                step.sqrtPriceStartX96, // current price
-                step.sqrtPriceNextX96, // target price
-                liquidity, // liquidity of this pool
-                state.amountSpecifiedRemaining // remaining
+                state.sqrtPriceX96,
+                (_zeroForOne ? step.sqrtPriceNextX96 < _sqrtPriceLimitX96 : step.sqrtPriceNextX96 > _sqrtPriceLimitX96)
+                    ? _sqrtPriceLimitX96
+                    : step.sqrtPriceNextX96,
+                state.liquidity,
+                state.amountSpecifiedRemaining
             );
 
             //  amount of tokens the price range can buy from user
@@ -263,8 +307,24 @@ contract UniswapV3Pool {
             // related number of the other token the pool can sell to user
             state.amountCalculated += step.amountOut;
 
-            //  state.sqrtPriceX96 is the current price that will be set after the swap (recall that trading changes current price).
-            state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+            // state.sqrtPriceX96 is the new current price, i.e. the price that will be set after the current swap
+            // step.sqrtPriceNextX96 is the price at the next initialized tick
+            // If these are equal, we have reached a price range boundary
+            //  when this happens, we want to update  L (add or remove liquidity)
+            // and continue the swap using the boundary tick as the current tick.
+            if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
+                int128 liquidityDelta = ticks.cross(step.nextTick);
+
+                if (_zeroForOne) liquidityDelta = -liquidityDelta;
+
+                state.liquidity = LiquidityMath.addLiquidity(state.liquidity, liquidityDelta);
+
+                if (state.liquidity == 0) revert NotEnoughLiquidity();
+
+                state.tick = _zeroForOne ? step.nextTick - 1 : step.nextTick;
+            } else if (state.sqrtPriceX96 != step.sqrtPriceStartX96) {
+                state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+            }
         }
 
         // Set new price and tick only if the new tick is different, to optimize gas.
