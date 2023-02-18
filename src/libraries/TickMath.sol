@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 pragma solidity >=0.5.0;
 
+import "abdk/ABDKMath64x64.sol";
+import "./FixedPoint96.sol";
+
 /**
  * @title Math library for computing sqrt prices from ticks and vice versa
  * @notice Computes sqrt price for ticks of size 1.0001, i.e. sqrt(1.0001^tick) as fixed point Q64.96 numbers. Supports
  * prices between 2**-128 and 2**128
  */
+
+/**
+ ABDKMath64x64.sqrt takes Q64.64 numbers so we need to convert price to such number.
+  The price is expected to not have the fractional part, so we’re shifting it by 64 bits.
+  The sqrt function also returns a Q64.64 number but TickMath.getTickAtSqrtRatio takes a Q64.96 number–this
+   is why we need to shift the result of the square root operation by 96 - 64 bits to the left. 
+   */
 library TickMath {
     /// @dev The minimum tick that may be passed to #getSqrtRatioAtTick computed from log base 1.0001 of 2**-128
     int24 internal constant MIN_TICK = -887272;
@@ -209,5 +219,11 @@ library TickMath {
         int24 tickHi = int24((log_sqrt10001 + 291339464771989622907027621153398088495) >> 128);
 
         tick = tickLow == tickHi ? tickLow : getSqrtRatioAtTick(tickHi) <= sqrtPriceX96 ? tickHi : tickLow;
+    }
+
+    function tick(uint256 price) internal pure returns (int24 tick_) {
+        tick_ = TickMath.getTickAtSqrtRatio(
+            uint160(int160(ABDKMath64x64.sqrt(int128(int256(price << 64))) << (FixedPoint96.RESOLUTION - 64)))
+        );
     }
 }

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.14;
 
-import "./libraries/interfaces/IUniswapV3Pool.sol";
-import "./libraries/LiquidityMath.sol";
-import "./libraries/interfaces/IUniswapV3Manager.sol";
-import { UniswapV3Pool, IERC20, TickMath } from "../src/UniswapV3Pool.sol";
+import { IUniswapV3Pool } from "./libraries/interfaces/IUniswapV3Pool.sol";
+import { IUniswapV3Manager } from "./libraries/interfaces/IUniswapV3Manager.sol";
+import { LiquidityMath, UniswapV3Pool, IERC20, TickMath } from "../src/UniswapV3Pool.sol";
 
 contract UniswapV3Manager is IUniswapV3Manager {
     error SlippageCheckFailed(uint256 amount0, uint256 amount1);
@@ -14,10 +13,11 @@ contract UniswapV3Manager is IUniswapV3Manager {
 
         (uint160 sqrtPriceX96, , , , ) = pool.slot0();
 
-        // √upper √lower
+        // √P.upper √P.lower
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(params.lowerTick);
         uint160 sqrtPriceUpperX96 = TickMath.getSqrtRatioAtTick(params.upperTick);
 
+        // Liquidity provider expect to provide amounts not smaller than amount0Min and amount1Min.
         uint128 liquidity = LiquidityMath.getLiquidityForAmounts(
             sqrtPriceX96,
             sqrtPriceLowerX96,
@@ -26,9 +26,7 @@ contract UniswapV3Manager is IUniswapV3Manager {
             params.amount1Desired
         );
 
-        // amount0Min and amount1Min are the amounts that are calculated based on slippage tolerance.
-        // They must be smaller than the desired amounts, with the gap controlled by the slippage tolerance setting.
-        // Liquidity provider expect to provide amounts not smaller than amount0Min and amount1Min.
+        //Next step is to provide liquidity to the pool and check the amounts returned by the pool: if they’re too low, we revert.
         (amount0, amount1) = pool.mint(
             msg.sender,
             params.lowerTick,
@@ -37,7 +35,6 @@ contract UniswapV3Manager is IUniswapV3Manager {
             abi.encode(IUniswapV3Pool.CallbackData({ token0: pool.token0(), token1: pool.token1(), payer: msg.sender }))
         );
 
-        //Next step is to provide liquidity to the pool and check the amounts returned by the pool: if they’re too low, we revert.
         if (amount0 < params.amount0Min || amount1 < params.amount1Min) revert SlippageCheckFailed(amount0, amount1);
     }
 
@@ -68,6 +65,12 @@ contract UniswapV3Manager is IUniswapV3Manager {
         UniswapV3Pool.CallbackData memory extra = abi.decode(data, (UniswapV3Pool.CallbackData));
         IERC20(extra.token0).transferFrom(extra.payer, msg.sender, amount0);
         IERC20(extra.token1).transferFrom(extra.payer, msg.sender, amount1);
+    }
+
+    function uniswapV3FlashCallback(bytes calldata data) public {
+        (uint256 amount0, uint256 amount1) = abi.decode(data, (uint256, uint256));
+        if (amount0 > 0) token0.transfer(msg.sender, amount0);
+        if (amount1 > 0) token1.transfer(msg.sender, amount1);
     }
 
     function uniswapV3SwapCallback(

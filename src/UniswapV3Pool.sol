@@ -4,6 +4,7 @@ pragma solidity ^0.8.17;
 import { IERC20 } from "./libraries/interfaces/IERC20.sol";
 import { IUniswapV3MintCallback } from "./libraries/interfaces/IUniswapV3MintCallback.sol";
 import { IUniswapV3SwapCallback } from "./libraries/interfaces/IUniswapV3SwapCallback.sol";
+import { IUniswapV3FlashCallback } from "./libraries/interfaces/IUniswapV3FlashCallback.sol";
 
 import { Math, SwapMath } from "./libraries/SwapMath.sol";
 import { LiquidityMath } from "./libraries/LiquidityMath.sol";
@@ -31,6 +32,7 @@ contract UniswapV3Pool {
     error ZeroLiquidity();
     error InvalidPriceLimit();
     error NotEnoughLiquidity();
+    error FlashLoanNotPaid();
 
     ///////////////////////////////////////////////
     //             EVENTS
@@ -55,6 +57,7 @@ contract UniswapV3Pool {
         uint128 liquidity,
         int24 tick
     );
+    event Flash(address indexed recipient, uint256 amount0, uint256 amount1);
 
     ///////////////////////////////////////////////
     //     STATE VARIABLES
@@ -67,11 +70,20 @@ contract UniswapV3Pool {
     // Pool tokens contract addresses
     address public immutable token0;
     address public immutable token1;
+    uint24 public fee;
 
     // First slot will contain essential data
     struct Slot0 {
-        uint160 sqrtPriceX96; // Current sqrt(P)
-        int24 tick; // Current tick
+        // Current sqrt(P)
+        uint160 sqrtPriceX96;
+        // Current tick
+        int24 tick;
+        // // Most recent observation index
+        // uint16 observationIndex;
+        // // Maximum number of observations
+        // uint16 observationCardinality;
+        // // Next maximum number of observations
+        // uint16 observationCardinalityNext;
     }
 
     // Data structure for callback functions when interacting with Pool
@@ -243,10 +255,10 @@ contract UniswapV3Pool {
         Slot0 memory slot0_ = slot0;
         uint128 liquidity_ = liquidity;
 
-        // When selling token x (zeroForOne is true), sqrtPriceLimitX96 must be between the current price
-        // and the minimal √P since selling token x moves the price down.
-        // Likewise, when selling token y, sqrtPriceLimitX96 must be between the current price
-        // and the maximal √P because price moves up.
+        // When selling token x (zeroForOne is true), sqrtPriceLimitX96 must be between
+        // the current price and the minimal √P since selling token X moves the price down.
+        // Likewise, when selling token y, sqrtPriceLimitX96 must be between
+        // the current price and the maximal √P because price moves up.
         if (
             _zeroForOne
                 ? _sqrtPriceLimitX96 > slot0_.sqrtPriceX96 || _sqrtPriceLimitX96 < TickMath.MIN_SQRT_RATIO
@@ -267,7 +279,9 @@ contract UniswapV3Pool {
         // The range is from state.sqrtPriceX96 to step.sqrtPriceNextX96,
         // where the latter is the price at the next initialized tick
         // (as returned by nextInitializedTickWithinOneWord.
-        //two conditions: full swap amount has not been filled and current price isn’t equal to sqrtPriceLimitX96
+        // Two conditions:
+        // 1. Full swap amount has not been filled, and
+        // 2. Current price isn’t equal to sqrtPriceLimitX96
         //Uniswap V3 pools don’t fail when slippage tolerance gets hit and simply executes swap partially.
         while (state.amountSpecifiedRemaining > 0 && state.sqrtPriceX96 != _sqrtPriceLimitX96) {
             // Declare a new swap step
@@ -290,8 +304,10 @@ contract UniswapV3Pool {
             step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.nextTick);
 
             // Compute the price, amountIn and amountOut
-            // we’re calculating the amounts that can be provider by the current price range, and the new current price the swap will result in.
-            // ensure that computeSwapStep never calculates swap amounts outside of sqrtPriceLimitX96–this guarantees that the current price will never cross the limiting price.
+            // we’re calculating: the amounts that can be provided by the current price range,
+            // and the new current price the swap will result in.
+            // ensure that computeSwapStep never calculates swap amounts outside of sqrtPriceLimitX96
+            // this guarantees that the current price will never cross the limiting price.
             (state.sqrtPriceX96, step.amountIn, step.amountOut) = SwapMath.computeSwapStep(
                 state.sqrtPriceX96,
                 (_zeroForOne ? step.sqrtPriceNextX96 < _sqrtPriceLimitX96 : step.sqrtPriceNextX96 > _sqrtPriceLimitX96)
@@ -350,6 +366,32 @@ contract UniswapV3Pool {
 
         emit Swap(msg.sender, _recipient, amount0_, amount1_, slot0.sqrtPriceX96, liquidity, slot0.tick);
     }
+
+    function flash(
+        uint256 amount0,
+        uint256 amount1,
+        bytes calldata data
+    ) public {
+        uint256 fee0 = Math.mulDivRoundingUp(amount0, fee, 1e6);
+        uint256 fee1 = Math.mulDivRoundingUp(amount1, fee, 1e6);
+
+        uint256 balance0Before = IERC20(token0).balanceOf(address(this));
+        uint256 balance1Before = IERC20(token1).balanceOf(address(this));
+
+        if (amount0 > 0) IERC20(token0).transfer(msg.sender, amount0);
+        if (amount1 > 0) IERC20(token1).transfer(msg.sender, amount1);
+
+        IUniswapV3FlashCallback(msg.sender).uniswapV3FlashCallback(fee0, fee1, data);
+
+        if (IERC20(token0).balanceOf(address(this)) < balance0Before + fee0) revert FlashLoanNotPaid();
+        if (IERC20(token1).balanceOf(address(this)) < balance1Before + fee1) revert FlashLoanNotPaid();
+
+        emit Flash(msg.sender, amount0, amount1);
+    }
+
+    /////////////////////////////////////////////////////////////////
+    //                  BALANCES
+    /////////////////////////////////////////////////////////////////
 
     /////////////////////////////////////////////////////////////////
     //                  BALANCES

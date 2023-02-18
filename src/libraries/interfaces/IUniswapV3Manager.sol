@@ -17,8 +17,8 @@ interface IUniswapV3Manager {
         int24 upperTick;
         uint256 amount0Desired;
         uint256 amount1Desired;
-        uint256 amount0Min;
-        uint256 amount1Min;
+        uint256 amount0Min; // Amounts calculated based on slippage tolerance
+        uint256 amount1Min; // must be smaller than desired amounts
     }
 
     struct SwapSingleParams {
