@@ -4,13 +4,15 @@ pragma solidity ^0.8.14;
 import { UniswapV3Pool } from "../UniswapV3Pool.sol";
 
 library PoolAddress {
+    error TokensHaveSameAddress();
+
     function computeAddress(
         address factory,
         address token0,
         address token1,
         uint24 fee
     ) internal pure returns (address pool) {
-        require(token0 < token1);
+        if (token0 >= token1) revert TokensHaveSameAddress();
 
         pool = address(
             uint160(

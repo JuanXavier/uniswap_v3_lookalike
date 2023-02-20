@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.17;
 
-import { IERC20 } from "./libraries/interfaces/IERC20.sol";
-import { IUniswapV3MintCallback } from "./libraries/interfaces/IUniswapV3MintCallback.sol";
-import { IUniswapV3SwapCallback } from "./libraries/interfaces/IUniswapV3SwapCallback.sol";
-import { IUniswapV3FlashCallback } from "./libraries/interfaces/IUniswapV3FlashCallback.sol";
-
+import { IERC20 } from "./interfaces/IERC20.sol";
+import { IUniswapV3MintCallback } from "./interfaces/IUniswapV3MintCallback.sol";
+import { IUniswapV3SwapCallback } from "./interfaces/IUniswapV3SwapCallback.sol";
+import { IUniswapV3FlashCallback } from "./interfaces/IUniswapV3FlashCallback.sol";
 import { Math, SwapMath } from "./libraries/SwapMath.sol";
 import { LiquidityMath } from "./libraries/LiquidityMath.sol";
 import { Position } from "./libraries/Position.sol";
@@ -13,10 +12,7 @@ import { Tick } from "./libraries/Tick.sol";
 import { TickMath } from "./libraries/TickMath.sol";
 import { TickBitmap } from "./libraries/TickBitmap.sol";
 
-// Pools also track
-// �
-// L (liquidity variable in our code), which is the total liquidity provided by all price ranges that include current price.
-
+/// Pools also track (L), which is the total liquidity provided by all price ranges that include current price.
 contract UniswapV3Pool {
     using Tick for mapping(int24 => Tick.Info);
     using TickBitmap for mapping(int16 => uint256);
@@ -24,7 +20,7 @@ contract UniswapV3Pool {
     using Position for Position.Info;
 
     ///////////////////////////////////////////////
-    //            ERRORS
+    //            ERRORS AND EVENTS
     ///////////////////////////////////////////////
 
     error InsufficientInputAmount();
@@ -34,9 +30,7 @@ contract UniswapV3Pool {
     error NotEnoughLiquidity();
     error FlashLoanNotPaid();
 
-    ///////////////////////////////////////////////
-    //             EVENTS
-    ///////////////////////////////////////////////
+    /* ------------------------------ */
 
     event Mint(
         address sender,
@@ -47,7 +41,6 @@ contract UniswapV3Pool {
         uint256 amount0_,
         uint256 amount1_
     );
-
     event Swap(
         address indexed sender,
         address indexed recipient,
@@ -57,6 +50,7 @@ contract UniswapV3Pool {
         uint128 liquidity,
         int24 tick
     );
+
     event Flash(address indexed recipient, uint256 amount0, uint256 amount1);
 
     ///////////////////////////////////////////////
@@ -95,7 +89,8 @@ contract UniswapV3Pool {
 
     /**
      * @dev Struct for maintaining the current state of a swap.
-     * @param amountSpecifiedRemaining  tracks the remaining amount of tokens to be bought by the pool. When it's zero, the swap is completed.
+     * @param amountSpecifiedRemaining  Tracks the remaining amount of tokens to be bought by the pool.
+     *                                  When zero, the swap is completed.
      * @param amountCalculated  calculated output amount by the contract.
      * @param sqrtPriceX96  new current price after
      * @param tick tick
@@ -109,7 +104,7 @@ contract UniswapV3Pool {
     }
 
     /**
-     * @dev Struct for maintaining the current state of a swap step. It tracks the state of one iteration of an “order filling”.
+     * @dev Maintains the current state of a swap step. It tracks the state of one iteration of an “order filling”.
      * @param sqrtPriceStartX96  tracks the starting price of the iteration.
      * @param nextTick  the next initialized tick that will provide liquidity for the swap.
      * @param sqrtPriceNextX96  the price at the next tick.
@@ -207,10 +202,11 @@ contract UniswapV3Pool {
 
             amount1_ = Math.calcAmount1Delta(slot0_.sqrtPriceX96, TickMath.getSqrtRatioAtTick(_lowerTick), _amount);
 
-            liquidity = LiquidityMath.addLiquidity(liquidity, int128(_amount)); // TODO: amount is negative when removing liquidity
+            liquidity = LiquidityMath.addLiquidity(liquidity, int128(_amount));
+            // TODO: amount is negative when removing liquidity
         }
         /*
-         * In all other cases, when the price range is below the current price, we want the range to contain only token y:
+         * In all other cases, when price range is below the current price, we want the range to contain only token y:
          */
         else {
             amount1_ = Math.calcAmount1Delta(
@@ -238,8 +234,9 @@ contract UniswapV3Pool {
     /**
      * @dev Function to execute a swap between two tokens in a smart pool.
      * @param _recipient Address of the recipient to receive the output tokens.
-     * @param _zeroForOne Boolean flag to control the swap direction. When true, token0 is traded in for token1; when false, it’s the opposite.
-     * @param _amountSpecified Unsigned integer (uint256) representing the amount of the input token specified for the swap.
+     * @param _zeroForOne Flag to control swap direction. IF true, token0 is traded in for token1;
+     * if false, it’s the opposite.
+     * @param _amountSpecified Unsigned integer representing the amount of the input token specified for the swap.
      * @param _sqrtPriceLimitX96 Unsigned integer (uint160) representing the limit of the sqrt price.
      * @param _data A byte array to pass extra data for the swap.
      * @return amount0_ A byte array to pass extra data for the swap.
@@ -274,7 +271,8 @@ contract UniswapV3Pool {
             liquidity: liquidity_
         });
 
-        // Loop until amountSpecifiedRemaining is 0, which will mean that the pool has enough liquidity to buy amountSpecified tokens from user.
+        // Loop until amountSpecifiedRemaining is 0, which will mean that the pool has enough liquidity to buy
+        // amountSpecified tokens from user.
         // we set up a price range that should provide liquidity for the swap
         // The range is from state.sqrtPriceX96 to step.sqrtPriceNextX96,
         // where the latter is the price at the next initialized tick
@@ -367,6 +365,23 @@ contract UniswapV3Pool {
         emit Swap(msg.sender, _recipient, amount0_, amount1_, slot0.sqrtPriceX96, liquidity, slot0.tick);
     }
 
+    /////////////////////////////////////////////////////////////////
+    //                  FLASH LOANS
+    /////////////////////////////////////////////////////////////////
+
+    /**
+     * @notice Executes a flash swap of tokens from this contract to the caller's address,
+     * invoking `uniswapV3FlashCallback()` on the caller with the swap's fee and additional data.
+     * @param amount0 The amount of token0 to swap from this contract to the caller's address.
+     * @param amount1 The amount of token1 to swap from this contract to the caller's address.
+     * @param data Additional data to pass to the `uniswapV3FlashCallback` function.
+     * @dev The caller must implement the `uniswapV3FlashCallback` function to receive the flash swap results.
+     * @dev This function charges a fee on the amount of tokens swapped, calculated as `fee` / 1e6,
+     * and transfers the fee to this contract.
+     * @dev If the flash swap succeeds, this function emits a `Flash` event.
+     * @dev If the flash swap fails, this function reverts and emits a `FlashLoanNotPaid` event.
+     */
+
     function flash(
         uint256 amount0,
         uint256 amount1,
@@ -388,10 +403,6 @@ contract UniswapV3Pool {
 
         emit Flash(msg.sender, amount0, amount1);
     }
-
-    /////////////////////////////////////////////////////////////////
-    //                  BALANCES
-    /////////////////////////////////////////////////////////////////
 
     /////////////////////////////////////////////////////////////////
     //                  BALANCES
