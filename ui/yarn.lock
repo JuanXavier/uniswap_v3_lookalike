@@ -7718,6 +7718,23 @@
   "resolved" "https://registry.npmjs.org/neo-async/-/neo-async-2.6.2.tgz"
   "version" "2.6.2"
 
+"ngraph.events@^1.2.1":
+  "integrity" "sha512-JsUbEOzANskax+WSYiAPETemLWYXmixuPAlmZmhIbIj6FH/WDgEGCGnRwUQBK0GjOnVm8Ui+e5IJ+5VZ4e32eQ=="
+  "resolved" "https://registry.npmjs.org/ngraph.events/-/ngraph.events-1.2.2.tgz"
+  "version" "1.2.2"
+
+"ngraph.graph@^20.0.1":
+  "integrity" "sha512-VFsQ+EMkT+7lcJO1QP8Ik3w64WbHJl27Q53EO9hiFU9CRyxJ8HfcXtfWz/U8okuoYKDctbciL6pX3vG5dt1rYA=="
+  "resolved" "https://registry.npmjs.org/ngraph.graph/-/ngraph.graph-20.0.1.tgz"
+  "version" "20.0.1"
+  dependencies:
+    "ngraph.events" "^1.2.1"
+
+"ngraph.path@^1.4.0":
+  "integrity" "sha512-yJZay4tP0wcjqkkf8zlMQ/T+JOgU+EWfdE4w4TG8OS94B12J/+Z44UOYxVJErE8E6/wFunX1hMZEB1/GHsBYHg=="
+  "resolved" "https://registry.npmjs.org/ngraph.path/-/ngraph.path-1.4.0.tgz"
+  "version" "1.4.0"
+
 "no-case@^3.0.4":
   "integrity" "sha512-fgAN3jGAh+RoxUGZHTSOLJIqUc2wmoBwGR4tbpNAKmmovFoWq0OdRkb0VkldReO2a2iBT/OEulG9XSUc10r3zg=="
   "resolved" "https://registry.npmjs.org/no-case/-/no-case-3.0.4.tgz"

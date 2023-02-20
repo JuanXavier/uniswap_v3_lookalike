@@ -1,26 +1,34 @@
-import { useContext } from 'react';
-import { MetaMaskContext } from '../contexts/MetaMask';
-import './MetaMask.css';
+import { useContext } from "react"
+import { MetaMaskContext } from "../contexts/MetaMask"
+import "./MetaMask.css"
 
 const chainIdToChain = (chainId) => {
   switch (chainId) {
-    case '0x1':
-      return 'Mainnet';
+    case "0x1":
+      return "Ethereum Mainnet"
 
-    case '0x7a69':
-      return 'Anvil'
+    case "0x7a69":
+      return "Anvil"
+
+    case "0x5":
+      return "Goerli Testnet"
+
+    case "0x89":
+      return "Polygon Mainnet"
 
     default:
-      return 'unknown chain';
-  };
+      return "Unknown Chain"
+  }
 }
 
-const shortAddress = address => (address.slice(0, 6) + "..." + address.slice(-4))
+const shortAddress = (address) => address.slice(0, 6) + "..." + address.slice(-4)
 
 const statusConnected = (account, chain) => {
   return (
-    <span>Connected to {chainIdToChain(chain)} as {shortAddress(account)}</span>
-  );
+    <span>
+      Connected to {chainIdToChain(chain)} as {shortAddress(account)}
+    </span>
+  )
 }
 
 const statusNotConnected = (connect) => {
@@ -33,28 +41,28 @@ const statusNotConnected = (connect) => {
 
 const renderStatus = (status, account, chain, connect) => {
   switch (status) {
-    case 'connected':
+    case "connected":
       return statusConnected(account, chain)
 
-    case 'not_connected':
+    case "not_connected":
       return statusNotConnected(connect)
 
-    case 'not_installed':
+    case "not_installed":
       return <span>MetaMask is not installed.</span>
 
     default:
-      return;
+      return
   }
 }
 
 const MetaMask = () => {
-  const context = useContext(MetaMaskContext);
+  const context = useContext(MetaMaskContext)
 
   return (
     <section className="MetaMaskContainer">
       {renderStatus(context.status, context.account, context.chain, context.connect)}
     </section>
-  );
+  )
 }
 
-export default MetaMask;
+export default MetaMask

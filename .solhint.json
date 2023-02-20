@@ -8,10 +8,12 @@
     "avoid-low-level-calls": "off",
     "prettier/prettier": "error",
     "max-line-length": "error",
+    "no-empty-blocks": "off",
     "ordering": "warn",
     "reason-string": ["warn", { "maxLength": 48 }],
     "func-name-mixedcase": "off",
     "private-vars-leading-underscore": "off",
+    "var-name-mixedcase": "off",
     "func-visibility": ["warn", { "ignoreConstructors": true }]
   }
 }

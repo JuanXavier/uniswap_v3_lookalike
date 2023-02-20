@@ -3,4 +3,14 @@ src = 'src'
 out = 'out'
 libs = ['lib']
 
+
+
+# ds-test/=lib/forge-std/lib/ds-test/src/
+# forge-std/=lib/forge-std/src/
+# solmate/=lib/forge-std/solmate/src/
+# weird-erc20/=lib/weird-erc20/src/
+# abdk/=lib/abdk-libraries-solidity
+# bytes-utils/=lib/solidity-bytes-utils/contracts
+# prb-math/=lib/prb-math/src
+
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config

@@ -31,9 +31,11 @@ contract UniswapV3Manager is IUniswapV3Manager {
     //                        MINT
     /////////////////////////////////////////////////////////////////
     function mint(MintParams calldata params) public returns (uint256 amount0, uint256 amount1) {
+        // Get the address of the pool and declare it
         address poolAddress = PoolAddress.computeAddress(factory, params.tokenA, params.tokenB, params.tickSpacing);
         IUniswapV3Pool pool = IUniswapV3Pool(poolAddress);
 
+        //
         (uint160 sqrtPriceX96, ) = pool.slot0();
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(params.lowerTick);
         uint160 sqrtPriceUpperX96 = TickMath.getSqrtRatioAtTick(params.upperTick);
@@ -80,18 +82,19 @@ contract UniswapV3Manager is IUniswapV3Manager {
         while (true) {
             hasMultiplePools = params.path.hasMultiplePools();
 
+            // Track the input amounts
             params.amountIn = _swap(
                 params.amountIn, // amountIn
                 hasMultiplePools ? address(this) : params.recipient, // recipient
-                0, //price limit set to 0 to disable slippage protection
+                0, //price limit set to 0 to disable slippage protection in the Pool contract
                 SwapCallbackData({ path: params.path.getFirstPool(), payer: payer })
             );
 
+            // If there are multiple pools, recipient is the manager contract, it’ll store tokens between swaps
             if (hasMultiplePools) {
-                // we’re changing payer
                 payer = address(this);
 
-                //  removing a processed pool from the path
+                // Remove a processed pool from the path
                 params.path = params.path.skipToken();
             } else {
                 amountOut = params.amountIn;
@@ -99,6 +102,7 @@ contract UniswapV3Manager is IUniswapV3Manager {
             }
         }
 
+        // Slippage protection
         if (amountOut < params.minAmountOut) revert TooLittleReceived(amountOut);
     }
 
@@ -145,19 +149,27 @@ contract UniswapV3Manager is IUniswapV3Manager {
         if (amount1 > 0) token1.transfer(msg.sender, amount1);
     }
 
+    //  expects encoded SwapCallbackData with path and payer address.
     function uniswapV3SwapCallback(
         int256 amount0,
         int256 amount1,
         bytes calldata data_
     ) public {
+        // Extract pool tokens from the path
         SwapCallbackData memory data = abi.decode(data_, (SwapCallbackData));
         (address tokenIn, address tokenOut, ) = data.path.decodeFirstPool();
+
+        // Figure out swap direction
         bool zeroForOne = tokenIn < tokenOut;
         int256 amount = zeroForOne ? amount0 : amount1;
 
+        // If payer is the current contract (true when making consecutive swaps),
+        // transfer tokens to the next pool (the one that called this callback) from current contract’s balance.
         if (data.payer == address(this)) {
             IERC20(tokenIn).transfer(msg.sender, uint256(amount));
-        } else {
+        }
+        // If payer is a different address (the user that initiated the swap), it transfers tokens from user’s balance.
+        else {
             IERC20(tokenIn).transferFrom(data.payer, msg.sender, uint256(amount));
         }
     }

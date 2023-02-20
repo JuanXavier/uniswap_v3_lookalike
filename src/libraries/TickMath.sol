@@ -1,31 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-pragma solidity >=0.5.0;
+pragma solidity >=0.8.0;
 
-import "abdk/ABDKMath64x64.sol";
-import "./FixedPoint96.sol";
-
-/**
- * @title Math library for computing sqrt prices from ticks and vice versa
- * @notice Computes sqrt price for ticks of size 1.0001, i.e. sqrt(1.0001^tick) as fixed point Q64.96 numbers. Supports
- * prices between 2**-128 and 2**128
- */
-
-/**
- ABDKMath64x64.sqrt takes Q64.64 numbers so we need to convert price to such number.
-  The price is expected to not have the fractional part, so we’re shifting it by 64 bits.
-  The sqrt function also returns a Q64.64 number but TickMath.getTickAtSqrtRatio takes a Q64.96 number–this
-   is why we need to shift the result of the square root operation by 96 - 64 bits to the left. 
-   */
+/// @title Math library for computing sqrt prices from ticks and vice versa
+/// @notice Computes sqrt price for ticks of size 1.0001, i.e. sqrt(1.0001^tick) as fixed point Q64.96 numbers. Supports
+/// prices between 2**-128 and 2**128
 library TickMath {
     /// @dev The minimum tick that may be passed to #getSqrtRatioAtTick computed from log base 1.0001 of 2**-128
     int24 internal constant MIN_TICK = -887272;
-
     /// @dev The maximum tick that may be passed to #getSqrtRatioAtTick computed from log base 1.0001 of 2**128
     int24 internal constant MAX_TICK = -MIN_TICK;
 
     /// @dev The minimum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MIN_TICK)
     uint160 internal constant MIN_SQRT_RATIO = 4295128739;
-
     /// @dev The maximum value that can be returned from #getSqrtRatioAtTick. Equivalent to getSqrtRatioAtTick(MAX_TICK)
     uint160 internal constant MAX_SQRT_RATIO = 1461446703485210103287273052203988822378723970342;
 
@@ -33,8 +19,8 @@ library TickMath {
      * @notice Calculates sqrt(1.0001^tick) * 2^96
      * @dev Throws if |tick| > max tick
      * @param tick The input tick for the above formula
-     * @return sqrtPriceX96 A Fixed point Q64.96 number representing the sqrt of the ratio of the two assets (token1/token0)
-     * at the given tick
+     * @return sqrtPriceX96 A Fixed point Q64.96 number representing the sqrt of the ratio of two assets (token1/token0)
+     *  at the given tick
      */
     function getSqrtRatioAtTick(int24 tick) internal pure returns (uint160 sqrtPriceX96) {
         uint256 absTick = tick < 0 ? uint256(-int256(tick)) : uint256(int256(tick));
@@ -69,13 +55,11 @@ library TickMath {
         sqrtPriceX96 = uint160((ratio >> 32) + (ratio % (1 << 32) == 0 ? 0 : 1));
     }
 
-    /**
-     * @notice Calculates the greatest tick value such that getRatioAtTick(tick) <= ratio
-     * @dev Throws in case sqrtPriceX96 < MIN_SQRT_RATIO, as MIN_SQRT_RATIO is the lowest value getRatioAtTick may
-     * ever return.
-     * @param sqrtPriceX96 The sqrt ratio for which to compute the tick as a Q64.96
-     * @return tick The greatest tick for which the ratio is less than or equal to the input ratio
-     */
+    /// @notice Calculates the greatest tick value such that getRatioAtTick(tick) <= ratio
+    /// @dev Throws in case sqrtPriceX96 < MIN_SQRT_RATIO, as MIN_SQRT_RATIO is the lowest value getRatioAtTick may
+    /// ever return.
+    /// @param sqrtPriceX96 The sqrt ratio for which to compute the tick as a Q64.96
+    /// @return tick The greatest tick for which the ratio is less than or equal to the input ratio
     function getTickAtSqrtRatio(uint160 sqrtPriceX96) internal pure returns (int24 tick) {
         // second inequality must be < because the price can never reach the price at the max tick
         require(sqrtPriceX96 >= MIN_SQRT_RATIO && sqrtPriceX96 < MAX_SQRT_RATIO, "R");
@@ -219,11 +203,5 @@ library TickMath {
         int24 tickHi = int24((log_sqrt10001 + 291339464771989622907027621153398088495) >> 128);
 
         tick = tickLow == tickHi ? tickLow : getSqrtRatioAtTick(tickHi) <= sqrtPriceX96 ? tickHi : tickLow;
-    }
-
-    function tick(uint256 price) internal pure returns (int24 tick_) {
-        tick_ = TickMath.getTickAtSqrtRatio(
-            uint160(int160(ABDKMath64x64.sqrt(int128(int256(price << 64))) << (FixedPoint96.RESOLUTION - 64)))
-        );
     }
 }
