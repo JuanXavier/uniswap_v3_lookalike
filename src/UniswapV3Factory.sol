@@ -21,6 +21,9 @@ contract UniswapV3Factory is IUniswapV3PoolDeployer {
     mapping(address => mapping(address => mapping(uint24 => address))) public pools;
     mapping(uint24 => uint24) public fees;
 
+    ///////////////////////////////////////////////
+    //            CONSTRUCTOR
+    ///////////////////////////////////////////////
     constructor() {
         fees[500] = 10;
         fees[3000] = 60;
@@ -31,7 +34,7 @@ contract UniswapV3Factory is IUniswapV3PoolDeployer {
      * @param tokenX The address of the first token.
      * @param tokenY The address of the second token.
      * @param fee The fee amount for the new pool.
-     * @return The address of the newly created pool contract.
+     * @return pool The address of the newly created pool contract.
      */
     function createPool(
         address tokenX,
@@ -47,6 +50,7 @@ contract UniswapV3Factory is IUniswapV3PoolDeployer {
         if (tokenX == address(0)) revert ZeroAddressNotAllowed();
         if (pools[tokenX][tokenY][fee] != address(0)) revert PoolAlreadyExists();
 
+        // Get the parameters that will be passed to constructor
         parameters = PoolParameters({
             factory: address(this),
             token0: tokenX,
@@ -56,7 +60,6 @@ contract UniswapV3Factory is IUniswapV3PoolDeployer {
         });
 
         pool = address(new UniswapV3Pool{ salt: keccak256(abi.encodePacked(tokenX, tokenY, fee)) }());
-
         delete parameters;
 
         pools[tokenX][tokenY][fee] = pool;

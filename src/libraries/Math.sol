@@ -5,9 +5,12 @@ import { FixedPoint96 } from "./FixedPoint96.sol";
 import "prb-math/Core.sol";
 
 library Math {
+    ///////////////////////////////////////////////
+    //                  AMOUNT 0
+    ///////////////////////////////////////////////
+
     /**
-     * @dev Finds △x
-     * TODO: round down when removing liquidity
+     * @dev Finds △x between two prices
      * @param sqrtPriceAX96 The sqrt price A in 96 bits fixed point format.
      * @param sqrtPriceBX96 The sqrt price B in 96 bits fixed point format.
      * @param liquidity The amount of liquidity.
@@ -16,26 +19,40 @@ library Math {
     function calcAmount0Delta(
         uint160 sqrtPriceAX96,
         uint160 sqrtPriceBX96,
-        uint128 liquidity
+        uint128 liquidity,
+        bool roundUp
     ) internal pure returns (uint256 amount0) {
-        // Sort the prices to ensure we don’t underflow when subtracting.
         if (sqrtPriceAX96 > sqrtPriceBX96) (sqrtPriceAX96, sqrtPriceBX96) = (sqrtPriceBX96, sqrtPriceAX96);
 
-        if (sqrtPriceAX96 == 0) revert();
+        require(sqrtPriceAX96 > 0);
 
-        amount0 = divRoundingUp(
-            mulDivRoundingUp(
-                (uint256(liquidity) << FixedPoint96.RESOLUTION), // Convert liquidity to a Q96.64 number by multiplying it by 2**96
-                (sqrtPriceBX96 - sqrtPriceAX96), // Multiply it by the difference of the prices
-                sqrtPriceBX96 // and divide it by the bigger price
-            ),
-            sqrtPriceAX96 //Then, we divide by the smaller price
-        );
+        uint256 numerator1 = uint256(liquidity) << FixedPoint96.RESOLUTION;
+        uint256 numerator2 = sqrtPriceBX96 - sqrtPriceAX96;
+
+        if (roundUp) {
+            amount0 = divRoundingUp(mulDivRoundingUp(numerator1, numerator2, sqrtPriceBX96), sqrtPriceAX96);
+        } else {
+            amount0 = mulDiv(numerator1, numerator2, sqrtPriceBX96) / sqrtPriceAX96;
+        }
     }
+
+    /// @notice Calculates amount0 delta between two prices
+    function calcAmount0Delta(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        int128 liquidity
+    ) internal pure returns (int256 amount0) {
+        amount0 = liquidity < 0
+            ? -int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false))
+            : int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true));
+    }
+
+    ///////////////////////////////////////////////
+    //                  AMOUNT 1
+    ///////////////////////////////////////////////
 
     /**
      * @dev Finds △y
-     * TODO: round down when removing liquidity
      * @param sqrtPriceAX96 The √priceA in 96 bits fixed point format.
      * @param sqrtPriceBX96 The √priceB in 96 bits fixed point format.
      * @param liquidity The amount of liquidity.
@@ -44,11 +61,16 @@ library Math {
     function calcAmount1Delta(
         uint160 sqrtPriceAX96,
         uint160 sqrtPriceBX96,
-        uint128 liquidity
+        uint128 liquidity,
+        bool roundUp
     ) internal pure returns (uint256 amount1) {
         if (sqrtPriceAX96 > sqrtPriceBX96) (sqrtPriceAX96, sqrtPriceBX96) = (sqrtPriceBX96, sqrtPriceAX96);
 
-        amount1 = mulDivRoundingUp(liquidity, (sqrtPriceBX96 - sqrtPriceAX96), FixedPoint96.Q96);
+        if (roundUp) {
+            amount1 = mulDivRoundingUp(liquidity, (sqrtPriceBX96 - sqrtPriceAX96), FixedPoint96.Q96);
+        } else {
+            amount1 = mulDiv(liquidity, (sqrtPriceBX96 - sqrtPriceAX96), FixedPoint96.Q96);
+        }
     }
 
     /**
