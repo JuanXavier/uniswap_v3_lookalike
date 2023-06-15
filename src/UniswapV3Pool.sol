@@ -23,25 +23,30 @@ import "prb-math/Core.sol";
 
 /// Pools also track (L), which is the total liquidity provided by all price ranges that include current price.
 contract UniswapV3Pool {
+    ///////////////////////////////////////////////
+    //                 LIBRARIES
+    ///////////////////////////////////////////////
+    using Position for Position.Info;
     using Tick for mapping(int24 => Tick.Info);
+    using Oracle for Oracle.Observation[65535];
     using TickBitmap for mapping(int16 => uint256);
     using Position for mapping(bytes32 => Position.Info);
-    using Position for Position.Info;
-    using Oracle for Oracle.Observation[65535];
 
     ///////////////////////////////////////////////
-    //            ERRORS AND EVENTS
+    //                  ERRORS
     ///////////////////////////////////////////////
 
-    error InsufficientInputAmount();
-    error InvalidTickRange();
     error ZeroLiquidity();
+    error InvalidTickRange();
+    error FlashLoanNotPaid();
     error InvalidPriceLimit();
     error NotEnoughLiquidity();
-    error FlashLoanNotPaid();
     error AlreadyInitialized();
+    error InsufficientInputAmount();
 
-    /* ------------------------------ */
+    ///////////////////////////////////////////////
+    //                  EVENTS
+    ///////////////////////////////////////////////
 
     event Mint(
         address sender,
@@ -95,46 +100,27 @@ contract UniswapV3Pool {
     address public immutable factory;
     address public immutable token0;
     address public immutable token1;
+
+    // Ticks and fees
     uint24 public immutable tickSpacing;
     uint24 public immutable fee;
     uint256 public feeGrowthGlobal0X128;
     uint256 public feeGrowthGlobal1X128;
 
-    // First slot will contain essential data
-    struct Slot0 {
-        // Current sqrt(P)
-        uint160 sqrtPriceX96;
-        // Current tick
-        int24 tick;
-        // // Most recent observation index
-        // uint16 observationIndex;
-        // // Maximum number of observations
-        // uint16 observationCardinality;
-        // // Next maximum number of observations
-        // uint16 observationCardinalityNext;
-    }
-
-    // Data structure for callback functions when interacting with Pool
+    // Data structure for callback functions when interacting with pool (this contract)
     struct CallbackData {
         address token0;
         address token1;
         address payer;
     }
 
-    /**
-     * @dev Struct for maintaining the current state of a swap.
-     * @param amountSpecifiedRemaining  Tracks the remaining amount of tokens to be bought by the pool.
-     *                                  When zero, the swap is completed.
-     * @param amountCalculated  calculated output amount by the contract.
-     * @param sqrtPriceX96  new current price after
-     * @param tick tick
-     */
-    struct SwapState {
-        uint256 amountSpecifiedRemaining;
-        uint256 amountCalculated;
-        uint160 sqrtPriceX96;
-        int24 tick;
-        uint128 liquidity;
+    // First slot will contain essential data
+    struct Slot0 {
+        uint160 sqrtPriceX96; // Current sqrt(P)
+        int24 tick; // Current tick
+        uint16 observationIndex; // Most recent observation index
+        uint16 observationCardinality; // Maximum number of observations
+        uint16 observationCardinalityNext; // Next maximum number of observations
     }
 
     /**
@@ -152,6 +138,24 @@ contract UniswapV3Pool {
         uint160 sqrtPriceNextX96;
         uint256 amountIn;
         uint256 amountOut;
+        uint256 feeAmount;
+    }
+
+    /**
+     * @dev Struct for maintaining the current state of a swap.
+     * @param amountSpecifiedRemaining  Tracks the remaining amount of tokens to be bought by the pool.
+     *                                  When zero, the swap is completed.
+     * @param amountCalculated  calculated output amount by the contract.
+     * @param sqrtPriceX96  new current price after
+     * @param tick tick
+     */
+    struct SwapState {
+        uint256 amountSpecifiedRemaining;
+        uint256 amountCalculated;
+        uint160 sqrtPriceX96;
+        int24 tick;
+        uint256 feeGrowthGlobalX128;
+        uint128 liquidity;
     }
 
     Slot0 public slot0;
@@ -173,8 +177,18 @@ contract UniswapV3Pool {
 
     function initialize(uint160 sqrtPriceX96) public {
         if (slot0.sqrtPriceX96 != 0) revert AlreadyInitialized();
+
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
-        slot0 = Slot0({ sqrtPriceX96: sqrtPriceX96, tick: tick });
+
+        (uint16 cardinality, uint16 cardinalityNext) = observations.initialize(_blockTimestamp());
+
+        slot0 = Slot0({
+            sqrtPriceX96: sqrtPriceX96,
+            tick: tick,
+            observationIndex: 0,
+            observationCardinality: cardinality,
+            observationCardinalityNext: cardinalityNext
+        });
     }
 
     /////////////////////////////////////////////////////////////////
@@ -182,83 +196,54 @@ contract UniswapV3Pool {
     /////////////////////////////////////////////////////////////////
     /**
      * @dev mint tokens for liquidity providers
-     * @param _owner The address of the owner of the tokens.
-     * @param _lowerTick Lower tick of the liquidity provision range.
-     * @param _upperTick Upper tick of the liquidity provision range.
-     * @param _amount The amount of liquidity being provided.
-     * @param _data Additional data passed through the call.
-     * @return amount0_ Amount of token0.
-     * @return amount1_ Amount of token1.
+     * @param owner The address of the owner of the liquidity.
+     * @param lowerTick Lower tick of the liquidity provision range.
+     * @param upperTick Upper tick of the liquidity provision range.
+     * @param amount The amount of liquidity being provided.
+     * @param data Additional data passed through the call.
+     * @return amount0 Amount of token0.
+     * @return amount1 Amount of token1.
      */
+
+    // The process of providing liquidity in Uniswap V2 is called minting.
+    // The reason is that the V2 pool contract mints tokens (LP-tokens) in exchange for liquidity.
+    // V3 doesn’t do that, but it still uses the same name for the function.
     function mint(
-        address _owner,
-        int24 _lowerTick,
-        int24 _upperTick,
-        uint128 _amount,
-        bytes calldata _data
-    ) external returns (uint256 amount0_, uint256 amount1_) {
-        // Sanity checks for validating ticks and liquidity
-        if (_lowerTick >= _upperTick || _lowerTick < MIN_TICK || _upperTick > MAX_TICK) revert InvalidTickRange();
-        if (_amount == 0) revert ZeroLiquidity();
+        address owner,
+        int24 lowerTick,
+        int24 upperTick,
+        uint128 amount,
+        bytes calldata data
+    ) external returns (uint256 amount0, uint256 amount1) {
+        // Sanity checks for validating tick range and liquidity
+        if (lowerTick >= upperTick || lowerTick < MIN_TICK || upperTick > MAX_TICK) revert InvalidTickRange();
+        if (amount == 0) revert ZeroLiquidity();
 
-        // Update ticks for the range
-        bool flippedLower = ticks.update(_lowerTick, int128(_amount), false);
-        bool flippedUpper = ticks.update(_upperTick, int128(_amount), true);
+        // todo
+        (, int256 amount0Int, int256 amount1Int) = _modifyPosition(
+            ModifyPositionParams({
+                owner: owner,
+                lowerTick: lowerTick,
+                upperTick: upperTick,
+                liquidityDelta: int128(amount)
+            })
+        );
 
-        if (flippedLower) tickBitmap.flipTick(_lowerTick, 1);
-        if (flippedUpper) tickBitmap.flipTick(_upperTick, 1);
-
-        // Update the position
-        Position.Info storage position = positions.get(_owner, _lowerTick, _upperTick);
-        position.update(_amount);
-
-        Slot0 memory slot0_ = slot0;
-
-        /**
-         * To support all the kinds of price ranges, we need to know whether the current price is
-         *below, inside, or above the price range specified by user and calculate token amounts
-         *accordingly. If the price range is above the current price, we want the liquidity to be composed of token x:
-         */
-        if (slot0_.tick < _lowerTick) {
-            amount0_ = Math.calcAmount0Delta(
-                TickMath.getSqrtRatioAtTick(_lowerTick),
-                TickMath.getSqrtRatioAtTick(_upperTick),
-                _amount
-            );
-        }
-        /**
-         * When the price range includes the current price, we want both tokens in amounts proportional to the price
-         * Notice that this is the only scenario where we want to update liquidity since the variable tracks
-         * liquidity that’s available immediately.
-         */
-        else if (slot0_.tick < _upperTick) {
-            amount0_ = Math.calcAmount0Delta(slot0_.sqrtPriceX96, TickMath.getSqrtRatioAtTick(_upperTick), _amount);
-
-            amount1_ = Math.calcAmount1Delta(slot0_.sqrtPriceX96, TickMath.getSqrtRatioAtTick(_lowerTick), _amount);
-
-            liquidity = LiquidityMath.addLiquidity(liquidity, int128(_amount));
-            // TODO: amount is negative when removing liquidity
-        }
-        /*
-         * In all other cases, when price range is below the current price, we want the range to contain only token y:
-         */
-        else {
-            amount1_ = Math.calcAmount1Delta(
-                TickMath.getSqrtRatioAtTick(_lowerTick),
-                TickMath.getSqrtRatioAtTick(_upperTick),
-                _amount
-            );
-        }
+        amount0 = uint256(amount0Int);
+        amount1 = uint256(amount1Int);
 
         uint256 balance0Before;
         uint256 balance1Before;
-        if (amount0_ > 0) balance0Before = _balance0();
-        if (amount1_ > 0) balance1Before = _balance1();
-        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(amount0_, amount1_, _data);
-        if (amount0_ > 0 && balance0Before + amount0_ > _balance0()) revert InsufficientInputAmount();
-        if (amount1_ > 0 && balance1Before + amount1_ > _balance1()) revert InsufficientInputAmount();
 
-        emit Mint(msg.sender, _owner, _lowerTick, _upperTick, _amount, amount0_, amount1_);
+        if (amount0 > 0) balance0Before = _balance0();
+        if (amount1 > 0) balance1Before = _balance1();
+
+        IUniswapV3MintCallback(msg.sender).uniswapV3MintCallback(amount0, amount1, data);
+
+        if (amount0 > 0 && balance0Before + amount0 > _balance0()) revert InsufficientInputAmount();
+        if (amount1 > 0 && balance1Before + amount1 > _balance1()) revert InsufficientInputAmount();
+
+        emit Mint(msg.sender, owner, lowerTick, upperTick, amount, amount0, amount1);
     }
 
     /////////////////////////////////////////////////////////////////
@@ -385,6 +370,12 @@ contract UniswapV3Pool {
     /////////////////////////////////////////////////////////////////
     //                       COLLECT
     /////////////////////////////////////////////////////////////////
+
+    // This function simply transfers tokens from a pool and ensures that only valid
+    // amounts can be transferred (one cannot transfer out more than they burned + fees they earned).
+
+    // There’s also a way to collect fees only without burning liquidity: burn 0 amount of liquidity and then
+    //  call collect. During burning, the position will be updated and token amounts it owes will be updated as well.
 
     function collect(
         address recipient,
@@ -585,19 +576,6 @@ contract UniswapV3Pool {
     /////////////////////////////////////////////////////////////////
     //                  FLASH LOANS
     /////////////////////////////////////////////////////////////////
-
-    /**
-     * @notice Executes a flash swap of tokens from this contract to the caller's address,
-     * invoking `uniswapV3FlashCallback()` on the caller with the swap's fee and additional data.
-     * @param amount0 The amount of token0 to swap from this contract to the caller's address.
-     * @param amount1 The amount of token1 to swap from this contract to the caller's address.
-     * @param data Additional data to pass to the `uniswapV3FlashCallback` function.
-     * @dev The caller must implement the `uniswapV3FlashCallback` function to receive the flash swap results.
-     * @dev This function charges a fee on the amount of tokens swapped, calculated as `fee` / 1e6,
-     * and transfers the fee to this contract.
-     * @dev If the flash swap succeeds, this function emits a `Flash` event.
-     * @dev If the flash swap fails, this function reverts and emits a `FlashLoanNotPaid` event.
-     */
 
     function flash(
         uint256 amount0,

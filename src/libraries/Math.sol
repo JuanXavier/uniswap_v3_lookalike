@@ -36,21 +36,6 @@ library Math {
         }
     }
 
-    /// @notice Calculates amount0 delta between two prices
-    function calcAmount0Delta(
-        uint160 sqrtPriceAX96,
-        uint160 sqrtPriceBX96,
-        int128 liquidity
-    ) internal pure returns (int256 amount0) {
-        amount0 = liquidity < 0
-            ? -int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false))
-            : int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true));
-    }
-
-    ///////////////////////////////////////////////
-    //                  AMOUNT 1
-    ///////////////////////////////////////////////
-
     /**
      * @dev Finds △y
      * @param sqrtPriceAX96 The √priceA in 96 bits fixed point format.
@@ -71,6 +56,32 @@ library Math {
         } else {
             amount1 = mulDiv(liquidity, (sqrtPriceBX96 - sqrtPriceAX96), FixedPoint96.Q96);
         }
+    }
+
+    /// @notice Calculates amount0 delta between two prices
+    function calcAmount0Delta(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        int128 liquidity
+    ) internal pure returns (int256 amount0) {
+        amount0 = liquidity < 0
+            ? -int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false))
+            : int256(calcAmount0Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true));
+    }
+
+    ///////////////////////////////////////////////
+    //                  AMOUNT 1
+    ///////////////////////////////////////////////
+
+    /// @notice Calculates amount1 delta between two prices
+    function calcAmount1Delta(
+        uint160 sqrtPriceAX96,
+        uint160 sqrtPriceBX96,
+        int128 liquidity
+    ) internal pure returns (int256 amount1) {
+        amount1 = liquidity < 0
+            ? -int256(calcAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(-liquidity), false))
+            : int256(calcAmount1Delta(sqrtPriceAX96, sqrtPriceBX96, uint128(liquidity), true));
     }
 
     /**

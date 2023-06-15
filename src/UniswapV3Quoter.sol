@@ -42,18 +42,14 @@ contract UniswapV3Quoter {
      *    sqrtPriceX96AfterList: An array of uint160 representing the √(price ratio) after each swap in the path
      *    tickAfterList: An array of int24 representing the tick index after each swap in the path
      */
-    function quote(bytes memory path, uint256 amountIn)
-        public
-        returns (
-            uint256 amountOut,
-            uint160[] memory sqrtPriceX96AfterList,
-            int24[] memory tickAfterList
-        )
-    {
+    function quote(
+        bytes memory path,
+        uint256 amountIn
+    ) public returns (uint256 amountOut, uint160[] memory sqrtPriceX96AfterList, int24[] memory tickAfterList) {
         sqrtPriceX96AfterList = new uint160[](path.numPools());
         tickAfterList = new int24[](path.numPools());
 
-        uint256 i = 0;
+        uint256 i;
         while (true) {
             // Get current pool's parameters
             (address tokenIn, address tokenOut, uint24 fee) = path.decodeFirstPool();
@@ -84,14 +80,9 @@ contract UniswapV3Quoter {
         }
     }
 
-    function quoteSingle(QuoteSingleParams memory params)
-        public
-        returns (
-            uint256 amountOut,
-            uint160 sqrtPriceX96After,
-            int24 tickAfter
-        )
-    {
+    function quoteSingle(
+        QuoteSingleParams memory params
+    ) public returns (uint256 amountOut, uint160 sqrtPriceX96After, int24 tickAfter) {
         IUniswapV3Pool pool = getPool(params.tokenIn, params.tokenOut, params.fee);
 
         bool zeroForOne = params.tokenIn < params.tokenOut;
@@ -115,11 +106,7 @@ contract UniswapV3Quoter {
     //                       CALLBACK
     /////////////////////////////////////////////////////////////////
 
-    function uniswapV3SwapCallback(
-        int256 amount0Delta,
-        int256 amount1Delta,
-        bytes memory data
-    ) external view {
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes memory data) external view {
         address pool = abi.decode(data, (address));
 
         uint256 amountOut = amount0Delta > 0 ? uint256(-amount1Delta) : uint256(-amount0Delta);
@@ -144,11 +131,7 @@ contract UniswapV3Quoter {
         }
     }
 
-    function getPool(
-        address token0,
-        address token1,
-        uint24 tickSpacing
-    ) internal view returns (IUniswapV3Pool pool) {
+    function getPool(address token0, address token1, uint24 tickSpacing) internal view returns (IUniswapV3Pool pool) {
         (token0, token1) = token0 < token1 ? (token0, token1) : (token1, token0);
         pool = IUniswapV3Pool(PoolAddress.computeAddress(factory, token0, token1, tickSpacing));
     }
